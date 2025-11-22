@@ -10,7 +10,6 @@ import { PointsEditForm } from "@/components/points-edit-form"
 import { LogOut } from "lucide-react"
 import { supabase, type Customer as SupabaseCustomer } from "@/lib/supabase"
 
-// Local interface matching the component expectations
 interface Customer {
   id: string
   name: string
@@ -34,23 +33,22 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [currentSearchQuery, setCurrentSearchQuery] = useState<string>("")
   const isFetchingRef = useRef(false)
 
-  // Fetch customers from Supabase - memoized to prevent unnecessary re-renders
+  // ⭐ Pagination
+  const [currentPage, setCurrentPage] = useState(1)
+  const itemsPerPage = 10
+
+  // Fetch customers from Supabase
   const fetchCustomers = useCallback(async (searchQuery?: string) => {
-    // Prevent duplicate simultaneous requests
-    if (isFetchingRef.current) {
-      return
-    }
+    if (isFetchingRef.current) return
 
     try {
       isFetchingRef.current = true
       setIsLoading(true)
       setError(null)
-      
-      let query = supabase
-        .from("customers")
-        .select("*")
 
-      // If search query provided, filter by name (case-insensitive)
+      let query = supabase.from("customers").select("*")
+
+      // Search filter
       if (searchQuery && searchQuery.trim()) {
         query = query.ilike("name", `%${searchQuery.trim()}%`)
         setCurrentSearchQuery(searchQuery.trim())
@@ -58,128 +56,125 @@ export function Dashboard({ onLogout }: DashboardProps) {
         setCurrentSearchQuery("")
       }
 
-      const { data, error: fetchError } = await query.order("join_date", { ascending: false })
+      // ⭐ SORT ALPHABETICALLY
+      const { data, error: fetchError } = await query.order("name", { ascending: true })
 
-      if (fetchError) {
-        throw fetchError
-      }
+      if (fetchError) throw fetchError
 
-      // Transform Supabase data to match component interface
-      const transformedCustomers: Customer[] =
-        data?.map((customer: SupabaseCustomer) => ({
-          id: customer.id,
-          name: customer.name,
-          points: customer.points,
-          joinDate: customer.join_date,
+      const transformed: Customer[] =
+        data?.map((c: SupabaseCustomer) => ({
+          id: c.id,
+          name: c.name,
+          points: c.points,
+          joinDate: c.join_date
         })) || []
 
-      setCustomers(transformedCustomers)
+      setCustomers(transformed)
+
+      // ⭐ Reset pagination whenever list is refreshed (search/add/edit/delete)
+      setCurrentPage(1)
+
     } catch (err) {
       console.error("Error fetching customers:", err)
-      setError("Failed to load customers. Please refresh the page.")
+      setError("Failed to load customers. Please refresh.")
     } finally {
       setIsLoading(false)
       isFetchingRef.current = false
     }
   }, [])
 
-  // Fetch customers on mount only
+  // Fetch on mount
   useEffect(() => {
     fetchCustomers()
   }, [fetchCustomers])
 
+  // Add customer
   const handleAddCustomer = async (data: { name: string; points: number }) => {
     try {
       const joinDate = new Date().toISOString().split("T")[0]
-      const { data: newCustomer, error: insertError } = await supabase
-        .from("customers")
-        .insert({
-          name: data.name,
-          points: data.points,
-          join_date: joinDate,
-        })
-        .select()
-        .single()
 
-      if (insertError) {
-        throw insertError
-      }
+      const { error } = await supabase.from("customers").insert({
+        name: data.name,
+        points: data.points,
+        join_date: joinDate
+      })
 
-      // Refresh the customer list from Supabase (preserve search if active)
-      await fetchCustomers(currentSearchQuery || undefined)
+      if (error) throw error
+
+      await fetchCustomers(currentSearchQuery)
       setAddDialogOpen(false)
+
     } catch (err) {
       console.error("Error adding customer:", err)
-      setError("Failed to add customer. Please try again.")
+      setError("Failed to add customer.")
     }
   }
 
+  // Edit customer
   const handleEditCustomer = async (data: { name: string }) => {
     if (!selectedCustomer) return
 
     try {
-      const { error: updateError } = await supabase
+      const { error } = await supabase
         .from("customers")
         .update({ name: data.name })
         .eq("id", selectedCustomer.id)
 
-      if (updateError) {
-        throw updateError
-      }
+      if (error) throw error
 
-      // Refresh the customer list from Supabase (preserve search if active)
-      await fetchCustomers(currentSearchQuery || undefined)
+      await fetchCustomers(currentSearchQuery)
       setEditDialogOpen(false)
       setSelectedCustomer(null)
+
     } catch (err) {
-      console.error("Error updating customer:", err)
-      setError("Failed to update customer. Please try again.")
+      console.error("Error editing customer:", err)
+      setError("Failed to update customer.")
     }
   }
 
+  // Delete
   const handleDeleteCustomer = async (id: string) => {
     try {
-      const { error: deleteError } = await supabase.from("customers").delete().eq("id", id)
+      const { error } = await supabase.from("customers").delete().eq("id", id)
+      if (error) throw error
 
-      if (deleteError) {
-        throw deleteError
-      }
+      await fetchCustomers(currentSearchQuery)
 
-      // Refresh the customer list from Supabase (preserve search if active)
-      await fetchCustomers(currentSearchQuery || undefined)
     } catch (err) {
-      console.error("Error deleting customer:", err)
-      setError("Failed to delete customer. Please try again.")
+      console.error("Delete error:", err)
+      setError("Failed to delete customer.")
     }
   }
 
+  // Update points
   const handleUpdatePoints = async (type: "add" | "redeem", points: number) => {
     if (!selectedCustomer) return
 
     try {
       const newPoints =
-        type === "add" ? selectedCustomer.points + points : Math.max(0, selectedCustomer.points - points)
+        type === "add"
+          ? selectedCustomer.points + points
+          : Math.max(0, selectedCustomer.points - points)
 
-      const { error: updateError } = await supabase
+      const { error } = await supabase
         .from("customers")
         .update({ points: newPoints })
         .eq("id", selectedCustomer.id)
 
-      if (updateError) {
-        throw updateError
-      }
+      if (error) throw error
 
-      // Refresh the customer list from Supabase (preserve search if active)
-      await fetchCustomers(currentSearchQuery || undefined)
+      await fetchCustomers(currentSearchQuery)
       setPointsEditOpen(false)
       setSelectedCustomer(null)
       setPointsAction(null)
+
     } catch (err) {
-      console.error("Error updating points:", err)
-      setError("Failed to update points. Please try again.")
+      console.error("Points update error:", err)
+      setError("Failed to update points.")
     }
   }
 
+  // Selection handlers
   const handleEditClick = (customer: Customer) => {
     setSelectedCustomer(customer)
     setEditDialogOpen(true)
@@ -197,12 +192,17 @@ export function Dashboard({ onLogout }: DashboardProps) {
     setPointsEditOpen(true)
   }
 
+  // Pagination calculations
   const totalCustomers = customers.length
+  const totalPages = Math.ceil(totalCustomers / itemsPerPage)
+  const startIndex = (currentPage - 1) * itemsPerPage
+  const currentPageCustomers = customers.slice(startIndex, startIndex + itemsPerPage)
 
   return (
     <div className="min-h-screen bg-background">
+
       {/* Header */}
-      <div className="border-b border-border bg-card">
+      <div className="border-b bg-card">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
@@ -220,51 +220,89 @@ export function Dashboard({ onLogout }: DashboardProps) {
         </div>
       </div>
 
-      {/* Main Content */}
+      {/* Main */}
       <div className="container mx-auto px-4 py-8">
-        {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-1 gap-4 mb-8">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Total Customers</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold">{totalCustomers}</div>
-              <p className="text-xs text-muted-foreground mt-1">Active members</p>
-            </CardContent>
-          </Card>
-        </div>
 
-        {/* Customers Section */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-4">
-            <div>
-              <CardTitle>Customers</CardTitle>
-              <CardDescription>Manage your loyalty program members</CardDescription>
-            </div>
-            <Button onClick={() => setAddDialogOpen(true)} size="sm">
-              Add Customer
-            </Button>
+        {/* Stats */}
+        <Card className="mb-8">
+          <CardHeader>
+            <CardTitle className="text-sm text-muted-foreground">Total Customers</CardTitle>
           </CardHeader>
           <CardContent>
+            <div className="text-3xl font-bold">{totalCustomers}</div>
+            <p className="text-xs text-muted-foreground mt-1">Active members</p>
+          </CardContent>
+        </Card>
+
+        {/* Customer List */}
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <div>
+              <CardTitle>Customers</CardTitle>
+              <CardDescription>Manage loyalty program members</CardDescription>
+            </div>
+            <Button size="sm" onClick={() => setAddDialogOpen(true)}>Add Customer</Button>
+          </CardHeader>
+
+          <CardContent>
+            {/* Error */}
             {error && (
-              <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 rounded-md">
+              <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 rounded">
                 <p className="text-sm text-destructive">{error}</p>
               </div>
             )}
+
+            {/* Table */}
             {isLoading ? (
-              <div className="text-center py-12">
-                <p className="text-muted-foreground">Loading customers...</p>
-              </div>
+              <div className="text-center py-12 text-muted-foreground">Loading customers...</div>
             ) : (
-              <CustomerTable
-                customers={customers}
-                onEdit={handleEditClick}
-                onDelete={handleDeleteCustomer}
-                onAddPoints={handleAddPointsClick}
-                onRedeemPoints={handleRedeemPointsClick}
-                onSearch={fetchCustomers}
-              />
+              <>
+                <CustomerTable
+                  customers={currentPageCustomers}
+                  onEdit={handleEditClick}
+                  onDelete={handleDeleteCustomer}
+                  onAddPoints={handleAddPointsClick}
+                  onRedeemPoints={handleRedeemPointsClick}
+                  onSearch={fetchCustomers}
+                />
+
+                {/* ⭐ Pagination */}
+                {totalPages > 1 && (
+                  <div className="flex justify-center gap-2 mt-6">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={currentPage === 1}
+                      onClick={() => setCurrentPage(p => p - 1)}
+                    >
+                      Prev
+                    </Button>
+
+                    {[...Array(totalPages)].map((_, i) => {
+                      const page = i + 1
+                      return (
+                        <Button
+                          key={page}
+                          variant={currentPage === page ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => setCurrentPage(page)}
+                        >
+                          {page}
+                        </Button>
+                      )
+                    })}
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={currentPage === totalPages}
+                      onClick={() => setCurrentPage(p => p + 1)}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                )}
+              </>
             )}
           </CardContent>
         </Card>
@@ -272,19 +310,8 @@ export function Dashboard({ onLogout }: DashboardProps) {
 
       {/* Dialogs */}
       <AddCustomerDialog open={addDialogOpen} onOpenChange={setAddDialogOpen} onSubmit={handleAddCustomer} />
-      <EditCustomerDialog
-        open={editDialogOpen}
-        onOpenChange={setEditDialogOpen}
-        customer={selectedCustomer}
-        onSubmit={handleEditCustomer}
-      />
-      <PointsEditForm
-        open={pointsEditOpen}
-        onOpenChange={setPointsEditOpen}
-        customer={selectedCustomer}
-        action={pointsAction}
-        onSubmit={handleUpdatePoints}
-      />
+      <EditCustomerDialog open={editDialogOpen} onOpenChange={setEditDialogOpen} customer={selectedCustomer} onSubmit={handleEditCustomer} />
+      <PointsEditForm open={pointsEditOpen} onOpenChange={setPointsEditOpen} customer={selectedCustomer} action={pointsAction} onSubmit={handleUpdatePoints} />
     </div>
   )
 }
